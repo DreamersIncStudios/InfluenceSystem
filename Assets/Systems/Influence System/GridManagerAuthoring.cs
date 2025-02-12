@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.AI;
 
 
-namespace DreamerIncStudio.InfluenceMapSystem{
+namespace DreamersIncStudio.InfluenceMapSystem{
     
     public class GridManagerAuthoring : MonoBehaviour
     {
@@ -47,8 +48,8 @@ namespace DreamerIncStudio.InfluenceMapSystem{
         public float3 Center;
         public int GridSizeX, GridSizeY;
         public float CellSize;
-        public NativeParallelMultiHashMap<int2, Node> Nodes;  
-        public NativeHashMap<float3, int> NodeSectorData; // < Position, Index>
+        public UnsafeHashMap<int2, Node> Nodes;  
+        public UnsafeHashMap<float3, int> NodeSectorData; // < Position, Index>
 
         public GridManager(GridManagerData data)
         {
@@ -56,8 +57,8 @@ namespace DreamerIncStudio.InfluenceMapSystem{
             GridSizeX = data.GridSizeX;
             GridSizeY = data.GridSizeY;
             CellSize = data.CellSize;
-            Nodes = new NativeParallelMultiHashMap<int2, Node>(Mathf.CeilToInt(GridSizeX*GridSizeY/CellSize), Allocator.Persistent);
-            NodeSectorData = new NativeHashMap<float3, int>(8, Allocator.Persistent);
+            Nodes = new UnsafeHashMap<int2, Node>(Mathf.CeilToInt(GridSizeX*GridSizeY/CellSize), Allocator.Persistent);
+            NodeSectorData = new UnsafeHashMap<float3, int>(8, Allocator.Persistent);
             InitializeGrid();
         }
 
