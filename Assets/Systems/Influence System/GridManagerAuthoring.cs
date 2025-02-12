@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using BovineLabs.Core.Iterators;
+using DreamersIncStudio.FactionSystem;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
@@ -41,6 +43,13 @@ namespace DreamersIncStudio.InfluenceMapSystem{
             Position = position;
             IsWalkable = isWalkable;
         }
+    }
+
+    [InternalBufferCapacity(0)]
+    public struct GridNode : IDynamicHashMap<int2, Node>
+    {
+        public Factions GridFor;
+        byte IDynamicHashMap<int2, Node>.Value { get; }
     }
 
     public struct GridManager : IComponentData
