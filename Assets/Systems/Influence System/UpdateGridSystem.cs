@@ -1,4 +1,6 @@
+using BovineLabs.Core.Iterators;
 using DreamersInc.InfluenceMapSystem;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -7,42 +9,65 @@ using UnityEngine;
 
 namespace DreamersIncStudio.InfluenceMapSystem
 {
-
-    public partial class UpdateGridSystem : SystemBase
+    public partial class IAUSUpdateGroup : ComponentSystemGroup
     {
-        
-        protected override void OnUpdate()
+        public IAUSUpdateGroup()
         {
-            new MyStruct().Schedule();
+            RateManager = new RateUtils.VariableRateManager(32, true);
+
         }
-  
+    }
+
+    [UpdateInGroup(typeof(IAUSUpdateGroup))]
+    public partial struct UpdateGridSystem : ISystem
+    {
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            var query = SystemAPI.QueryBuilder().WithAll<InfluenceComponent, LocalToWorld>().Build();
+            new MyStruct()
+            {
+                Influence = query.ToComponentDataArray<InfluenceComponent>(allocator: Allocator.TempJob),
+                Transforms = query.ToComponentDataArray<LocalToWorld>(allocator: Allocator.TempJob)
+            }.Schedule();
+        }
+  [BurstCompile]
         partial struct MyStruct: IJobEntity
         {
             public NativeArray<InfluenceComponent> Influence;
             public NativeArray<LocalToWorld> Transforms;
-            void Execute(Entity entity, ref GridManager manager)
+            void Execute(Entity entity,ref GridManagerData data, DynamicBuffer<GridNode> gridNodes, DynamicBuffer<SectorNodes> sectorNode)
             {
-                foreach (var node in manager.Nodes)
+                var nodes = gridNodes.AsHashMap<GridNode, int2, Node>();
+                var NodeSectorData = sectorNode.AsHashMap<SectorNodes, float3, int>();
+
+                for (int x = 0; x < data.GridSizeX; x++)
                 {
-                    int sectorMask = 0;
-                    if (!node.Value.IsWalkable) continue;
-                    for (int i = 0; i < Transforms.Length; i++)
+                    for (int y = 0; y < data.GridSizeY; y++)
                     {
-                        var dist = Vector3.Distance(node.Value.Position, Transforms[i].Position);  
-                        var direction = ((Vector3)node.Value.Position - (Vector3)Transforms[i].Position).normalized;
+                        var index = new int2(x, y);
+                        int sectorMask = 0;
+                        if (!nodes[index].IsWalkable) continue;
+                        for (var i = 0; i < Transforms.Length; i++)
+                        {
+                            var dist = Vector3.Distance(nodes[index].Position, Transforms[i].Position);
+                            var direction = ((Vector3)nodes[index].Position - (Vector3)Transforms[i].Position)
+                                .normalized;
 
-                        if(dist > Influence[i].DetectionRadius) continue;
-                        if (IsObjectBlocked(Transforms[i].Position, node.Value.Position)) continue;
-                        int sector = GetSectorForDirection(direction);
-                        int rangeValue = GetRangeValue(dist, Influence[i].DetectionRadius);
-                        int sectorShift = sector * 4;
-                        int currentSectorValue = (sectorMask >> sectorShift) & 0b1111;
-                        int newSectorValue = Mathf.Min(15, currentSectorValue + rangeValue);
-                        sectorMask &= ~(0b1111 << sectorShift);
-                        sectorMask |= (newSectorValue << sectorShift);
+                            if (dist > Influence[i].DetectionRadius) continue;
+                            if (IsObjectBlocked(Transforms[i].Position, nodes[index].Position)) continue;
+                            int sector = GetSectorForDirection(direction);
+                            int rangeValue = GetRangeValue(dist, Influence[i].DetectionRadius);
+                            int sectorShift = sector * 4;
+                            int currentSectorValue = (sectorMask >> sectorShift) & 0b1111;
+                            int newSectorValue = Mathf.Min(15, currentSectorValue + rangeValue);
+                            sectorMask &= ~(0b1111 << sectorShift);
+                            sectorMask |= (newSectorValue << sectorShift);
+                        }
+
+                        NodeSectorData[nodes[index].Position] = sectorMask;
+
                     }
-                    manager.NodeSectorData[node.Value.Position] = sectorMask; 
-
                 }
             }
 

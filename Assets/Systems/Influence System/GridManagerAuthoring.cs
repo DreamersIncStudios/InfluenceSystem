@@ -20,6 +20,7 @@ namespace DreamersIncStudio.InfluenceMapSystem{
         [SerializeField] float CellSize=1;
         
         class baker:Baker<GridManagerAuthoring> {
+            
             public override void Bake(GridManagerAuthoring authoring)
             {
                 var entity = GetEntity(TransformUsageFlags.WorldSpace);
@@ -29,17 +30,40 @@ namespace DreamersIncStudio.InfluenceMapSystem{
                     GridSizeY = authoring.GridSizeY,
                     GridSizeX =  authoring.GridSizeX
                 });
+                var buffer = AddBuffer<GridNode>(entity).InitializeHashMap<GridNode, int2, Node>();
+                AddBuffer<SectorNodes>(entity).InitializeHashMap<SectorNodes, float3, int>();
+                var hashMap = buffer.AsHashMap<GridNode, int2, Node>();
+                var startingPosition = authoring.Center - new float3(authoring.GridSizeX * authoring.CellSize / 2, 0, authoring.GridSizeY * authoring.CellSize / 2);
+
+               
+          
+                    for (var x = 0; x < authoring.GridSizeX; x++)
+                    {
+                        for (var y = 0; y < authoring.GridSizeY; y++)
+                        {
+                            var position = startingPosition +
+                                           new float3(x * authoring.CellSize, 0, y * authoring.CellSize);
+                            hashMap.Add(new int2(x, y), new Node(FactionNames.Citizen, position, true));
+                        }
+                    }
+
+
+                    return;
+
+                bool IsPositionOnNavMesh(float3 position)=> NavMesh.SamplePosition(position, out _, authoring.CellSize/2, NavMesh.AllAreas);
             }
         }
     }
     [Serializable]
     public struct Node
     {
+        public FactionNames GridFor;
         public float3 Position;
         public bool IsWalkable;
 
-        public Node(float3 position, bool isWalkable = false)
+        public Node(FactionNames faction, float3 position, bool isWalkable = false)
         {
+            GridFor = faction;
             Position = position;
             IsWalkable = isWalkable;
         }
@@ -48,43 +72,18 @@ namespace DreamersIncStudio.InfluenceMapSystem{
     [InternalBufferCapacity(0)]
     public struct GridNode : IDynamicHashMap<int2, Node>
     {
-        public Factions GridFor;
+
         byte IDynamicHashMap<int2, Node>.Value { get; }
+   
+
     }
-
-    public struct GridManager : IComponentData
+    [InternalBufferCapacity(0)]
+    public struct SectorNodes : IDynamicHashMap<float3, int>
     {
-        public float3 Center;
-        public int GridSizeX, GridSizeY;
-        public float CellSize;
-        public UnsafeHashMap<int2, Node> Nodes;  
-        public UnsafeHashMap<float3, int> NodeSectorData; // < Position, Index>
 
-        public GridManager(GridManagerData data)
-        {
-            Center = data.Center;
-            GridSizeX = data.GridSizeX;
-            GridSizeY = data.GridSizeY;
-            CellSize = data.CellSize;
-            Nodes = new UnsafeHashMap<int2, Node>(Mathf.CeilToInt(GridSizeX*GridSizeY/CellSize), Allocator.Persistent);
-            NodeSectorData = new UnsafeHashMap<float3, int>(8, Allocator.Persistent);
-            InitializeGrid();
-        }
+        byte IDynamicHashMap<float3, int>.Value { get; }
+   
 
-        private void InitializeGrid()
-        {
-            var startingPosition = Center - new float3(GridSizeX * CellSize / 2, 0, GridSizeY * CellSize / 2);
-            for (var x = 0; x < GridSizeX; x++)
-            {
-                for (var y = 0; y < GridSizeY; y++)
-                {
-                    var position = startingPosition + new float3(x * CellSize, 0, y * CellSize);
-                    Nodes.Add(new int2(x, y), new Node(position, isPositionOnNavMesh(position)));
-                }
-            }
-        }
-
-        private bool isPositionOnNavMesh(float3 position)=> NavMesh.SamplePosition(position, out _, CellSize/2, NavMesh.AllAreas);
     }
 
     public struct GridManagerData : IComponentData // This get baked in editor. Baking system converts to GridManager
@@ -94,21 +93,4 @@ namespace DreamersIncStudio.InfluenceMapSystem{
         public float CellSize;
     }
 
-     partial struct AddGridBakingSystem : ISystem
-    {
-        public void OnUpdate(ref SystemState state)
-        {
-            var query = SystemAPI.QueryBuilder()
-                .WithAll<GridManagerData>()
-                .Build();
-            state.EntityManager.AddComponent<GridManager>(query);
-            foreach (var (manager, data) in SystemAPI.Query<RefRW<GridManager>, GridManagerData>())
-            {
-                manager.ValueRW = new GridManager(data);
-            }
-            state.EntityManager.RemoveComponent<GridManagerData>(query);
-
-
-        }
-    }
 }
