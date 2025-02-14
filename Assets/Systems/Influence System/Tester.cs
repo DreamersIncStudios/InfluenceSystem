@@ -9,7 +9,7 @@ public class Tester : MonoBehaviour
       public override void Bake(Tester authoring)
       {
           var entity = GetEntity(TransformUsageFlags.WorldSpace);
-          AddComponent(entity, new InfluenceComponent(1, 10,10, 25));
+          AddComponent(entity, new InfluenceComponent(1, 10,10, 15));
       }
    }
 }

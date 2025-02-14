@@ -1,11 +1,15 @@
+using System.Collections.Generic;
 using BovineLabs.Core.Iterators;
 using DreamersInc.InfluenceMapSystem;
+using DreamersIncStudio.FactionSystem;
+using TMPro;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using Unity.Transforms;
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace DreamersIncStudio.InfluenceMapSystem
 {
@@ -13,81 +17,129 @@ namespace DreamersIncStudio.InfluenceMapSystem
     {
         public IAUSUpdateGroup()
         {
-            RateManager = new RateUtils.VariableRateManager(32, true);
+            RateManager = new RateUtils.VariableRateManager(64, true);
 
         }
     }
 
-    [UpdateInGroup(typeof(IAUSUpdateGroup))]
-    public partial struct UpdateGridSystem : ISystem
+   [UpdateInGroup(typeof(IAUSUpdateGroup))]
+    public partial class UpdateGridSystem : SystemBase
     {
-        [BurstCompile]
-        public void OnUpdate(ref SystemState state)
+        public int gridSizeX = 700;
+        public int gridSizeZ = 700;
+        public float cellSize = 1.0f;
+
+        Node[,] grid;
+
+        // A sector represents an 8-way directional segment (45-degree slices) 
+        // around a grid node, used to track enemy influence and danger levels in different directions.
+        readonly Dictionary<Vector3, int> nodeSectorData = new(); // Each position will map to an 8-sector bitmask
+
+        public Node GetNodeFromWorldPosition(Vector3 worldPosition)
         {
-            var query = SystemAPI.QueryBuilder().WithAll<InfluenceComponent, LocalToWorld>().Build();
-            new MyStruct()
-            {
-                Influence = query.ToComponentDataArray<InfluenceComponent>(allocator: Allocator.TempJob),
-                Transforms = query.ToComponentDataArray<LocalToWorld>(allocator: Allocator.TempJob)
-            }.Schedule();
+            int x = Mathf.RoundToInt(worldPosition.x / cellSize);
+            int z = Mathf.RoundToInt(worldPosition.z / cellSize);
+            x = Mathf.Clamp(x, 0, gridSizeX - 1); // Clamp to grid bounds.
+            z = Mathf.Clamp(z, 0, gridSizeZ - 1); // Clamp to grid bounds.
+            return grid[x, z];
         }
-  [BurstCompile]
-        partial struct MyStruct: IJobEntity
+
+        public List<Node> GetNodesInRange(float3 position, float range)
         {
-            public NativeArray<InfluenceComponent> Influence;
-            public NativeArray<LocalToWorld> Transforms;
-            void Execute(Entity entity,ref GridManagerData data, DynamicBuffer<GridNode> gridNodes, DynamicBuffer<SectorNodes> sectorNode)
+            var index = range / 2;
+            var startPosition = position - new float3(index, 0, index);
+            var endPosition = position + new float3(index, 0, index);
+            var nodesInRange = new List<Node>();
+            for (int x = Mathf.RoundToInt(startPosition.x / cellSize); x <= Mathf.RoundToInt(endPosition.x / cellSize); x++)
+            for (int z = Mathf.RoundToInt(startPosition.z / cellSize); z <= Mathf.RoundToInt(endPosition.z / cellSize); z++)
             {
-                var nodes = gridNodes.AsHashMap<GridNode, int2, Node>();
-                var NodeSectorData = sectorNode.AsHashMap<SectorNodes, float3, int>();
+                var node = grid[x, z];
+                if (node.IsWalkable) nodesInRange.Add(node);
+            }
+            return nodesInRange;
+            
+        }
 
-                for (int x = 0; x < data.GridSizeX; x++)
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            InitializeGrid();
+        }
+
+        protected override void OnUpdate()
+        {
+            PrecomputeSectors();
+            if (nodeSectorData.TryGetValue(new float3(40, 0, 40), out var sectorMask))
+            {
+                Debug.Log(sectorMask);
+            }
+            else
+            {
+                Debug.Log("No sector data found");
+            }
+
+        }
+        void PrecomputeSectors()
+        {
+         nodeSectorData.Clear();
+
+            var enemiesQuery = SystemAPI.QueryBuilder().
+                WithAll<LocalToWorld,InfluenceComponent>()
+                .Build(); 
+            var enemyLocations = enemiesQuery.ToComponentDataArray<LocalToWorld>(Allocator.Temp);
+            foreach (var enemy in enemyLocations)
+            {
+                var nodes = GetNodesInRange(enemy.Position, 30);
+                foreach (var node in nodes)
                 {
-                    for (int y = 0; y < data.GridSizeY; y++)
-                    {
-                        var index = new int2(x, y);
-                        int sectorMask = 0;
-                        if (!nodes[index].IsWalkable) continue;
-                        for (var i = 0; i < Transforms.Length; i++)
-                        {
-                            var dist = Vector3.Distance(nodes[index].Position, Transforms[i].Position);
-                            var direction = ((Vector3)nodes[index].Position - (Vector3)Transforms[i].Position)
-                                .normalized;
-
-                            if (dist > Influence[i].DetectionRadius) continue;
-                            if (IsObjectBlocked(Transforms[i].Position, nodes[index].Position)) continue;
-                            int sector = GetSectorForDirection(direction);
-                            int rangeValue = GetRangeValue(dist, Influence[i].DetectionRadius);
-                            int sectorShift = sector * 4;
-                            int currentSectorValue = (sectorMask >> sectorShift) & 0b1111;
-                            int newSectorValue = Mathf.Min(15, currentSectorValue + rangeValue);
-                            sectorMask &= ~(0b1111 << sectorShift);
-                            sectorMask |= (newSectorValue << sectorShift);
-                        }
-
-                        NodeSectorData[nodes[index].Position] = sectorMask;
-
-                    }
+                    int sectorMask = 0;
+                    float detectionRadius = 25;
+                    Vector3 direction = ((Vector3)node.Position - (Vector3)enemy.Position).normalized;
+                    float distance = Vector3.Distance(node.Position, enemy.Position);
+                
+                    if (distance > detectionRadius) continue;
+                    if (IsObstructed(enemy.Position, node.Position + new float3(0.5f, 0, 0.5f))) continue;
+                
+                    int sector = GetSectorForDirection(direction); 
+                    int rangeValue = GetRangeValue(distance, detectionRadius);
+                    int sectorShift = sector * 4;
+                    int currentSectorValue = (sectorMask >> sectorShift) & 0b1111;
+                    int newSectorValue = Mathf.Min(15, currentSectorValue + rangeValue);
+                    sectorMask &= ~(0b1111 << sectorShift);
+                    sectorMask |= newSectorValue << sectorShift;
+                
+                 nodeSectorData[node.Position] = sectorMask;
                 }
             }
-
-            int GetRangeValue(float dist, float DetectionRadius)
+            enemyLocations.Dispose();
+        }
+        void InitializeGrid()
+        {
+            grid = new Node[gridSizeX, gridSizeZ];
+            for (int x = 0; x < gridSizeX; x++)
+            for (int z = 0; z < gridSizeZ; z++)
             {
-                if (dist < DetectionRadius * .5f) return 3;
-                if (dist < DetectionRadius * .75f) return 2;
-                return dist <= DetectionRadius ? 1 : 0;
-            }
-
-            private int GetSectorForDirection(Vector3 direction)
-            {
-                return Mathf.FloorToInt((Mathf.Atan2(direction.z, direction.x)* Mathf.Rad2Deg+360)%360/45);
-            }
-
-            private bool IsObjectBlocked(float3 enemyPosition, float3 nodePosition)
-            {
-                return false; // TODO: Add dots physics 
+                var pos = new Vector3(x, 0, z) * cellSize;
+                grid[x, z] = new Node(FactionNames.Citizen, pos, true);
             }
         }
+        int GetRangeValue(float distance, float detectionRadius) {
+            if (distance < detectionRadius * 0.5f) return 3;
+            if (distance < detectionRadius * 0.75f) return 2;
+            if (distance <= detectionRadius) return 1;
+            return 0;
+        }
+
+        int GetSectorForDirection(Vector3 direction) {
+            return Mathf.FloorToInt((Mathf.Atan2(direction.z, direction.x) * Mathf.Rad2Deg + 360) % 360 / 45f);
+        }
+        bool IsObstructed(Vector3 from, Vector3 to)
+        {
+            return false;
+        }
+
+        bool IsPositionOnNavMesh(Vector3 position) =>
+            NavMesh.SamplePosition(position, out _, cellSize / 2, NavMesh.AllAreas);
 
     }
 }
